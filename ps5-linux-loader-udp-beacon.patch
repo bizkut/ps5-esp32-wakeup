@@ -1,0 +1,142 @@
+diff --git a/include/config.h b/include/config.h
+--- a/include/config.h
++++ b/include/config.h
+@@ -27,6 +27,21 @@
+ 
+ // Linux boot config
+ #define VRAM_SIZE (512ULL * 1024 * 1024)
++#ifndef ENABLE_LINUX_WAKE_BEACON
++#define ENABLE_LINUX_WAKE_BEACON 1
++#endif
++#ifndef LINUX_WAKE_BEACON_TOKEN
++#define LINUX_WAKE_BEACON_TOKEN "ps5-linux"
++#endif
++#ifndef LINUX_WAKE_BEACON_PORT
++#define LINUX_WAKE_BEACON_PORT 9755
++#endif
++#ifndef LINUX_WAKE_BEACON_REPEATS
++#define LINUX_WAKE_BEACON_REPEATS 3
++#endif
++#ifndef LINUX_WAKE_BEACON_INTERVAL_US
++#define LINUX_WAKE_BEACON_INTERVAL_US 300000
++#endif
+ #define ENABLE_POST_HV_TEXT_DUMP 1
+ #define ENABLE_SALINA_USB_INIT 1
+ #define POST_HV_TEXT_DUMP_PA 0x477000000ULL
+diff --git a/include/linux_wake_beacon.h b/include/linux_wake_beacon.h
+new file mode 100644
+--- /dev/null
++++ b/include/linux_wake_beacon.h
+@@ -0,0 +1,6 @@
++#ifndef LINUX_WAKE_BEACON_H
++#define LINUX_WAKE_BEACON_H
++
++int linux_wake_beacon_send(unsigned int firmware_version);
++
++#endif
+diff --git a/source/linux_wake_beacon.c b/source/linux_wake_beacon.c
+new file mode 100644
+--- /dev/null
++++ b/source/linux_wake_beacon.c
+@@ -0,0 +1,82 @@
++#include "config.h"
++#include "linux_wake_beacon.h"
++
++#include <arpa/inet.h>
++#include <errno.h>
++#include <netinet/in.h>
++#include <stdio.h>
++#include <string.h>
++#include <sys/socket.h>
++#include <unistd.h>
++
++#ifndef ENABLE_LINUX_WAKE_BEACON
++#define ENABLE_LINUX_WAKE_BEACON 1
++#endif
++#ifndef LINUX_WAKE_BEACON_TOKEN
++#define LINUX_WAKE_BEACON_TOKEN "ps5-linux"
++#endif
++#ifndef LINUX_WAKE_BEACON_PORT
++#define LINUX_WAKE_BEACON_PORT 9755
++#endif
++#ifndef LINUX_WAKE_BEACON_REPEATS
++#define LINUX_WAKE_BEACON_REPEATS 3
++#endif
++#ifndef LINUX_WAKE_BEACON_INTERVAL_US
++#define LINUX_WAKE_BEACON_INTERVAL_US 300000
++#endif
++
++int linux_wake_beacon_send(unsigned int firmware_version) {
++#if ENABLE_LINUX_WAKE_BEACON
++  int fd = socket(AF_INET, SOCK_DGRAM, 0);
++  if (fd < 0) {
++    printf("[linux-wake] socket failed errno=%d\n", errno);
++    return -1;
++  }
++
++  int yes = 1;
++  if (setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &yes, sizeof(yes)) < 0) {
++    printf("[linux-wake] SO_BROADCAST failed errno=%d\n", errno);
++    close(fd);
++    return -1;
++  }
++
++  struct sockaddr_in dst;
++  memset(&dst, 0, sizeof(dst));
++  dst.sin_family = AF_INET;
++  dst.sin_port = htons(LINUX_WAKE_BEACON_PORT);
++  dst.sin_addr.s_addr = htonl(INADDR_BROADCAST);
++
++  char payload[160];
++  int len = snprintf(payload, sizeof(payload),
++                     "PS5LINUX_ARMED v1 token=%s fw=%04x",
++                     LINUX_WAKE_BEACON_TOKEN, firmware_version);
++  if (len <= 0 || len >= (int)sizeof(payload)) {
++    printf("[linux-wake] payload formatting failed\n");
++    close(fd);
++    return -1;
++  }
++
++  int ok = 0;
++  for (int i = 0; i < LINUX_WAKE_BEACON_REPEATS; i++) {
++    ssize_t sent = sendto(fd, payload, (size_t)len, 0,
++                          (const struct sockaddr *)&dst, sizeof(dst));
++    if (sent == len) {
++      ok = 1;
++      printf("[linux-wake] beacon %d/%d sent: %s\n", i + 1,
++             LINUX_WAKE_BEACON_REPEATS, payload);
++    } else {
++      printf("[linux-wake] beacon %d/%d failed errno=%d sent=%zd\n", i + 1,
++             LINUX_WAKE_BEACON_REPEATS, errno, sent);
++    }
++    if (i + 1 < LINUX_WAKE_BEACON_REPEATS) {
++      usleep(LINUX_WAKE_BEACON_INTERVAL_US);
++    }
++  }
++
++  close(fd);
++  return ok ? 0 : -1;
++#else
++  (void)firmware_version;
++  return 0;
++#endif
++}
+diff --git a/source/main.c b/source/main.c
+--- a/source/main.c
++++ b/source/main.c
+@@ -1,5 +1,6 @@
+ #include "hv_defeat_0304.h"
+ #include "hv_defeat_0506.h"
++#include "linux_wake_beacon.h"
+ #include "loader.h"
+ #include "m2_probe.h"
+ #include "prepare_resume.h"
+@@ -75,6 +76,8 @@ int main(void) {
+          "for the orange light to stop "
+          "blinking and then wakeup to Linux :)\n");
+ 
++  linux_wake_beacon_send((unsigned int)fw);
++
+   sleep(5);
+   enter_rest_mode();
+ 

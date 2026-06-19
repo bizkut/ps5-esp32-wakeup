@@ -1,0 +1,12 @@
+PS5 ESP32 Wake
+
+This project includes Bluetooth wake behavior and USB controller address
+extraction logic based on the upstream pywakepsXonbt project:
+
+  https://github.com/FreeTHX/pywakepsXonbt
+
+pywakepsXonbt is licensed under the Apache License, Version 2.0.
+
+PlayStation, PS5, DualSense, and DualShock are trademarks or registered
+trademarks of Sony Interactive Entertainment Inc. This project is unofficial
+and is not affiliated with or endorsed by Sony Interactive Entertainment.

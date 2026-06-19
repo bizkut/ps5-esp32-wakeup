@@ -1,0 +1,97 @@
+menu "PS5 Linux Wake"
+
+config PSWAKE_WIFI_SSID
+    string "WiFi SSID"
+    default ""
+    help
+        LAN SSID used to receive the PS5 Linux loader UDP beacon.
+
+config PSWAKE_WIFI_PASSWORD
+    string "WiFi password"
+    default ""
+
+config PSWAKE_AP_FALLBACK
+    bool "Enable AP fallback when WiFi SSID is empty or STA fails"
+    default y
+
+config PSWAKE_AP_SSID
+    string "Fallback AP SSID"
+    default "pswake-esp32"
+
+config PSWAKE_AP_PASSWORD
+    string "Fallback AP password"
+    default "pswake1234"
+
+config PSWAKE_PROFILE_NAME
+    string "Default profile name"
+    default "ps5"
+
+config PSWAKE_TOKEN
+    string "Default profile token"
+    default "ps5-linux"
+
+config PSWAKE_PS5_BT_ADDR
+    string "PlayStation Bluetooth address"
+    default "00:00:00:00:00:00"
+
+config PSWAKE_CONTROLLER_BT_ADDR
+    string "Paired controller Bluetooth address"
+    default "00:00:00:00:00:00"
+
+config PSWAKE_UDP_PORT
+    int "UDP beacon listen port"
+    default 9755
+
+config PSWAKE_PING_INTERVAL_MS
+    int "Ping interval while armed"
+    default 2000
+
+config PSWAKE_PING_TIMEOUT_MS
+    int "Rest-mode ping timeout"
+    default 20000
+
+config PSWAKE_REST_SETTLE_MS
+    int "Rest-mode settle delay before BT wake"
+    default 10000
+
+config PSWAKE_WAKE_RETRIES
+    int "BT wake retries"
+    default 1
+
+config PSWAKE_LINUX_UP_TIMEOUT_MS
+    int "Linux-up wait timeout after wake"
+    default 180000
+
+config PSWAKE_BTN_WAKE_GPIO
+    int "T-Display wake/manual arm button GPIO"
+    default 0
+
+config PSWAKE_BTN_CANCEL_GPIO
+    int "T-Display cancel button GPIO"
+    default 35
+
+config PSWAKE_LCD_MOSI
+    int "T-Display LCD MOSI GPIO"
+    default 19
+
+config PSWAKE_LCD_SCLK
+    int "T-Display LCD SCLK GPIO"
+    default 18
+
+config PSWAKE_LCD_CS
+    int "T-Display LCD CS GPIO"
+    default 5
+
+config PSWAKE_LCD_DC
+    int "T-Display LCD DC GPIO"
+    default 16
+
+config PSWAKE_LCD_RST
+    int "T-Display LCD RST GPIO"
+    default 23
+
+config PSWAKE_LCD_BL
+    int "T-Display LCD backlight GPIO"
+    default 4
+
+endmenu
