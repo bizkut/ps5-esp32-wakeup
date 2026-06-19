@@ -22,6 +22,15 @@ Sony Interactive Entertainment.
 - `ps5-logo.jpg`, `ps5-linux.jpg` - source images used to generate the embedded
   LCD logo masks.
 
+## Compatible Controllers
+
+The USB configuration helper can read paired Bluetooth addresses from these
+Sony controllers:
+
+- PS5 DualSense
+- PS4 DualShock 4
+- PS3 DualShock 3 / Sixaxis
+
 ## Loader Patch
 
 From your PS5 Linux loader checkout:
@@ -52,7 +61,7 @@ idf.py menuconfig
 ```
 
 To pull the paired controller and PlayStation Bluetooth addresses directly from
-a USB-connected DualSense, DualShock 4, or DualShock 3 controller:
+a compatible USB-connected controller:
 
 ```sh
 python3 -m pip install -r requirements.txt
