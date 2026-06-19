@@ -1,7 +1,8 @@
 diff --git a/include/config.h b/include/config.h
+index 433cff1..b79a59b 100644
 --- a/include/config.h
 +++ b/include/config.h
-@@ -27,6 +27,21 @@
+@@ -28,6 +28,21 @@
  
  // Linux boot config
  #define VRAM_SIZE (512ULL * 1024 * 1024)
@@ -20,11 +21,12 @@ diff --git a/include/config.h b/include/config.h
 +#ifndef LINUX_WAKE_BEACON_INTERVAL_US
 +#define LINUX_WAKE_BEACON_INTERVAL_US 300000
 +#endif
- #define ENABLE_POST_HV_TEXT_DUMP 1
- #define ENABLE_SALINA_USB_INIT 1
- #define POST_HV_TEXT_DUMP_PA 0x477000000ULL
+ #define CMD_LINE                                                               \
+   "root=/dev/sda2 rw rootwait console=ttyTitania0 console=tty0 "               \
+   "video=DP-1:1920x1080@60 mitigations=off idle=halt pci=pcie_bus_perf"
 diff --git a/include/linux_wake_beacon.h b/include/linux_wake_beacon.h
 new file mode 100644
+index 0000000..1c36194
 --- /dev/null
 +++ b/include/linux_wake_beacon.h
 @@ -0,0 +1,6 @@
@@ -36,6 +38,7 @@ new file mode 100644
 +#endif
 diff --git a/source/linux_wake_beacon.c b/source/linux_wake_beacon.c
 new file mode 100644
+index 0000000..96c8d7b
 --- /dev/null
 +++ b/source/linux_wake_beacon.c
 @@ -0,0 +1,82 @@
@@ -122,6 +125,7 @@ new file mode 100644
 +#endif
 +}
 diff --git a/source/main.c b/source/main.c
+index 923ac14..61379af 100644
 --- a/source/main.c
 +++ b/source/main.c
 @@ -1,5 +1,6 @@
@@ -129,9 +133,9 @@ diff --git a/source/main.c b/source/main.c
  #include "hv_defeat_0506.h"
 +#include "linux_wake_beacon.h"
  #include "loader.h"
- #include "m2_probe.h"
  #include "prepare_resume.h"
-@@ -75,6 +76,8 @@ int main(void) {
+ #include "utils.h"
+@@ -38,6 +39,8 @@ int main(void) {
           "for the orange light to stop "
           "blinking and then wakeup to Linux :)\n");
  
