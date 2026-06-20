@@ -19,6 +19,30 @@
 #define LCD_V_RES 135
 #define LCD_PIXELS (LCD_H_RES * LCD_V_RES)
 
+#ifndef CONFIG_PSWAKE_HAS_DISPLAY
+#define CONFIG_PSWAKE_HAS_DISPLAY 0
+#endif
+
+#ifndef CONFIG_PSWAKE_LCD_SWAP_XY
+#define CONFIG_PSWAKE_LCD_SWAP_XY 0
+#endif
+
+#ifndef CONFIG_PSWAKE_LCD_MIRROR_X
+#define CONFIG_PSWAKE_LCD_MIRROR_X 0
+#endif
+
+#ifndef CONFIG_PSWAKE_LCD_MIRROR_Y
+#define CONFIG_PSWAKE_LCD_MIRROR_Y 0
+#endif
+
+#ifndef CONFIG_PSWAKE_LCD_X_GAP
+#define CONFIG_PSWAKE_LCD_X_GAP 0
+#endif
+
+#ifndef CONFIG_PSWAKE_LCD_Y_GAP
+#define CONFIG_PSWAKE_LCD_Y_GAP 0
+#endif
+
 static const char *TAG = "display";
 static esp_lcd_panel_handle_t s_panel;
 static uint16_t *s_fb;
@@ -129,6 +153,10 @@ static void draw_logo(void) {
 }
 
 esp_err_t display_init(void) {
+#if !CONFIG_PSWAKE_HAS_DISPLAY
+    ESP_LOGI(TAG, "display disabled by device profile");
+    return ESP_OK;
+#else
     ESP_RETURN_ON_ERROR(gpio_set_direction(CONFIG_PSWAKE_LCD_BL, GPIO_MODE_OUTPUT),
                         TAG, "backlight gpio");
     gpio_set_level(CONFIG_PSWAKE_LCD_BL, 1);
@@ -168,13 +196,21 @@ esp_err_t display_init(void) {
     ESP_RETURN_ON_ERROR(esp_lcd_panel_reset(s_panel), TAG, "panel reset");
     ESP_RETURN_ON_ERROR(esp_lcd_panel_init(s_panel), TAG, "panel init");
     ESP_RETURN_ON_ERROR(esp_lcd_panel_invert_color(s_panel, true), TAG, "invert");
-    ESP_RETURN_ON_ERROR(esp_lcd_panel_mirror(s_panel, true, true), TAG, "mirror");
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_swap_xy(s_panel, CONFIG_PSWAKE_LCD_SWAP_XY),
+                        TAG, "swap xy");
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_mirror(s_panel, CONFIG_PSWAKE_LCD_MIRROR_X,
+                                             CONFIG_PSWAKE_LCD_MIRROR_Y),
+                        TAG, "mirror");
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_set_gap(s_panel, CONFIG_PSWAKE_LCD_X_GAP,
+                                              CONFIG_PSWAKE_LCD_Y_GAP),
+                        TAG, "gap");
     ESP_RETURN_ON_ERROR(esp_lcd_panel_disp_on_off(s_panel, true), TAG, "display on");
 
     s_fb = heap_caps_malloc(LCD_PIXELS * sizeof(uint16_t), MALLOC_CAP_DMA);
     if (!s_fb) return ESP_ERR_NO_MEM;
     display_status("BOOT", "DISPLAY READY", "", "");
     return ESP_OK;
+#endif
 }
 
 void display_set_os(display_os_t os) {
@@ -183,6 +219,11 @@ void display_set_os(display_os_t os) {
 
 void display_status(const char *state, const char *line1, const char *line2,
                     const char *line3) {
+#if !CONFIG_PSWAKE_HAS_DISPLAY
+    ESP_LOGI(TAG, "%s %s %s %s", state ? state : "", line1 ? line1 : "",
+             line2 ? line2 : "", line3 ? line3 : "");
+    return;
+#else
     if (!s_panel || !s_fb) return;
     uint16_t bg = rgb565(250, 250, 248);
     uint16_t band = s_os == DISPLAY_OS_LINUX ? rgb565(20, 20, 20)
@@ -199,4 +240,5 @@ void display_status(const char *state, const char *line1, const char *line2,
         text(168, 124, line3, 1, muted);
     }
     esp_lcd_panel_draw_bitmap(s_panel, 0, 0, LCD_H_RES, LCD_V_RES, s_fb);
+#endif
 }

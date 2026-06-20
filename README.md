@@ -1,9 +1,9 @@
 # PS5 ESP32 Wake
 
-ESP-IDF firmware for a LilyGO/TTGO T-Display ESP32-WROOM that listens for a
-PS5 Linux loader UDP beacon, watches the console until it enters rest mode, and
-then attempts a Classic Bluetooth wake using the paired controller and
-PlayStation Bluetooth addresses.
+ESP-IDF firmware for ESP32 boards that listens for a PS5 Linux loader UDP
+beacon, watches the console until it enters rest mode, and then attempts a
+Classic Bluetooth wake using the paired controller and PlayStation Bluetooth
+addresses.
 
 The LCD shows the PS5 logo by default. When the loader beacon is detected, the
 screen says `LINUX TIME`. After Linux confirms boot with a `PS5LINUX_UP` packet,
@@ -21,6 +21,25 @@ Sony Interactive Entertainment.
   tree to broadcast the arming beacon before rest mode.
 - `ps5-logo.jpg`, `ps5-linux.jpg` - source images used to generate the embedded
   LCD logo masks.
+- `profiles/` - board profile defaults for T-Display and headless DevKitC.
+
+## Device Profiles
+
+Two ESP32 board profiles are available:
+
+- `LilyGO/TTGO T-Display ESP32` - enables the ST7789 LCD, PS5/Linux logos, and
+  the onboard wake/cancel buttons.
+- `ESP32-DevKitC without display` - disables LCD and button GPIO handling for a
+  headless board while keeping Wi-Fi, UDP beacon detection, ping monitoring, and
+  Classic Bluetooth wake.
+
+The default profile is T-Display. Select the board in `idf.py menuconfig` under
+`PS5 Linux Wake > Device profile`, or use one of the profile defaults:
+
+```sh
+idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;profiles/t-display.defaults" reconfigure
+idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;profiles/esp32-devkitc.defaults" reconfigure
+```
 
 ## Compatible Controllers
 
@@ -53,12 +72,17 @@ Install ESP-IDF, then source its environment in your shell:
 . "$HOME/esp/esp-idf/export.sh"
 ```
 
-Use `menuconfig` for Wi-Fi, token, timeout, and display settings:
+Use `menuconfig` for board profile, Wi-Fi, token, timeout, and display settings:
 
 ```sh
 idf.py set-target esp32
 idf.py menuconfig
 ```
+
+For T-Display, the default LCD settings target a 240x135 display in landscape
+mode. If the image is rotated or offset on your board revision, adjust
+`Swap LCD X/Y axes`, `Mirror LCD X axis`, `Mirror LCD Y axis`,
+`LCD X gap/offset`, and `LCD Y gap/offset` in `menuconfig`.
 
 To pull the paired controller and PlayStation Bluetooth addresses directly from
 a compatible USB-connected controller:

@@ -1,5 +1,27 @@
 menu "PS5 Linux Wake"
 
+choice PSWAKE_DEVICE_PROFILE
+    prompt "Device profile"
+    default PSWAKE_DEVICE_TDISPLAY
+
+config PSWAKE_DEVICE_TDISPLAY
+    bool "LilyGO/TTGO T-Display ESP32"
+
+config PSWAKE_DEVICE_DEVKITC
+    bool "ESP32-DevKitC without display"
+
+endchoice
+
+config PSWAKE_HAS_DISPLAY
+    bool
+    default y if PSWAKE_DEVICE_TDISPLAY
+    default n if PSWAKE_DEVICE_DEVKITC
+
+config PSWAKE_HAS_BUTTONS
+    bool
+    default y if PSWAKE_DEVICE_TDISPLAY
+    default n if PSWAKE_DEVICE_DEVKITC
+
 config PSWAKE_WIFI_SSID
     string "WiFi SSID"
     default ""
@@ -63,35 +85,68 @@ config PSWAKE_LINUX_UP_TIMEOUT_MS
     default 180000
 
 config PSWAKE_BTN_WAKE_GPIO
-    int "T-Display wake/manual arm button GPIO"
-    default 0
+    int "Wake/manual arm button GPIO (-1 disables)"
+    default 0 if PSWAKE_DEVICE_TDISPLAY
+    default -1 if PSWAKE_DEVICE_DEVKITC
 
 config PSWAKE_BTN_CANCEL_GPIO
-    int "T-Display cancel button GPIO"
-    default 35
+    int "Cancel button GPIO (-1 disables)"
+    default 35 if PSWAKE_DEVICE_TDISPLAY
+    default -1 if PSWAKE_DEVICE_DEVKITC
 
 config PSWAKE_LCD_MOSI
     int "T-Display LCD MOSI GPIO"
+    depends on PSWAKE_HAS_DISPLAY
     default 19
 
 config PSWAKE_LCD_SCLK
     int "T-Display LCD SCLK GPIO"
+    depends on PSWAKE_HAS_DISPLAY
     default 18
 
 config PSWAKE_LCD_CS
     int "T-Display LCD CS GPIO"
+    depends on PSWAKE_HAS_DISPLAY
     default 5
 
 config PSWAKE_LCD_DC
     int "T-Display LCD DC GPIO"
+    depends on PSWAKE_HAS_DISPLAY
     default 16
 
 config PSWAKE_LCD_RST
     int "T-Display LCD RST GPIO"
+    depends on PSWAKE_HAS_DISPLAY
     default 23
 
 config PSWAKE_LCD_BL
     int "T-Display LCD backlight GPIO"
+    depends on PSWAKE_HAS_DISPLAY
     default 4
+
+config PSWAKE_LCD_SWAP_XY
+    bool "Swap LCD X/Y axes"
+    depends on PSWAKE_HAS_DISPLAY
+    default y
+
+config PSWAKE_LCD_MIRROR_X
+    bool "Mirror LCD X axis"
+    depends on PSWAKE_HAS_DISPLAY
+    default y
+
+config PSWAKE_LCD_MIRROR_Y
+    bool "Mirror LCD Y axis"
+    depends on PSWAKE_HAS_DISPLAY
+    default n
+
+config PSWAKE_LCD_X_GAP
+    int "LCD X gap/offset"
+    depends on PSWAKE_HAS_DISPLAY
+    default 40
+
+config PSWAKE_LCD_Y_GAP
+    int "LCD Y gap/offset"
+    depends on PSWAKE_HAS_DISPLAY
+    default 52
 
 endmenu

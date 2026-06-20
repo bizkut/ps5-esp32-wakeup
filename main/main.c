@@ -101,6 +101,11 @@ static void start_wake_flow(const char *ip, const char *task_name) {
     }
 }
 
+static uint64_t gpio_pin_mask_if_valid(int gpio) {
+    if (gpio < 0 || gpio > 39) return 0;
+    return 1ULL << gpio;
+}
+
 static void load_profile(void) {
     memset(&s_profile, 0, sizeof(s_profile));
     strlcpy(s_profile.name, CONFIG_PSWAKE_PROFILE_NAME, sizeof(s_profile.name));
@@ -358,22 +363,31 @@ static void udp_task(void *arg) {
 }
 
 static void button_task(void *arg) {
+    uint64_t pin_mask = gpio_pin_mask_if_valid(CONFIG_PSWAKE_BTN_WAKE_GPIO) |
+                        gpio_pin_mask_if_valid(CONFIG_PSWAKE_BTN_CANCEL_GPIO);
+    if (!pin_mask) {
+        ESP_LOGI(TAG, "buttons disabled by device profile");
+        vTaskDelete(NULL);
+        return;
+    }
+
     gpio_config_t io = {
-        .pin_bit_mask = (1ULL << CONFIG_PSWAKE_BTN_WAKE_GPIO) |
-                        (1ULL << CONFIG_PSWAKE_BTN_CANCEL_GPIO),
+        .pin_bit_mask = pin_mask,
         .mode = GPIO_MODE_INPUT,
         .pull_up_en = GPIO_PULLUP_ENABLE,
     };
     gpio_config(&io);
     while (1) {
-        if (gpio_get_level(CONFIG_PSWAKE_BTN_WAKE_GPIO) == 0) {
+        if (CONFIG_PSWAKE_BTN_WAKE_GPIO >= 0 &&
+            gpio_get_level(CONFIG_PSWAKE_BTN_WAKE_GPIO) == 0) {
             if (s_state == ST_IDLE && s_profile.last_ip[0]) {
                 display_set_os(DISPLAY_OS_PS5);
                 start_wake_flow(s_profile.last_ip, "wake_flow_manual");
             }
             vTaskDelay(pdMS_TO_TICKS(700));
         }
-        if (gpio_get_level(CONFIG_PSWAKE_BTN_CANCEL_GPIO) == 0) {
+        if (CONFIG_PSWAKE_BTN_CANCEL_GPIO >= 0 &&
+            gpio_get_level(CONFIG_PSWAKE_BTN_CANCEL_GPIO) == 0) {
             display_set_os(DISPLAY_OS_PS5);
             set_state(ST_IDLE, "CANCELLED", NULL);
             vTaskDelay(pdMS_TO_TICKS(700));
