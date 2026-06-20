@@ -9,5 +9,6 @@ typedef enum {
 
 esp_err_t display_init(void);
 void display_set_os(display_os_t os);
+void display_set_net_status(const char *status);
 void display_status(const char *state, const char *line1, const char *line2,
                     const char *line3);

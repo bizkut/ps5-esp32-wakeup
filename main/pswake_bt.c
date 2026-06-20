@@ -22,6 +22,7 @@
 #define OCF_READ_BD_ADDR 0x0009
 #define HCI_CREATE_CONN_OPCODE ((OCF_CREATE_CONN & 0x03ff) | (OGF_LINK_CTL << 10))
 #define HCI_READ_BD_ADDR_OPCODE ((OCF_READ_BD_ADDR & 0x03ff) | (OGF_INFO_PARAM << 10))
+#define POST_CREATE_CONN_HOLD_MS 2000
 
 static const char *TAG = "pswake_bt";
 static QueueHandle_t s_evtq;
@@ -128,15 +129,19 @@ static esp_err_t bt_start_with_controller_addr(const uint8_t controller_addr[6])
 
     s_evtq = xQueueCreate(16, sizeof(hci_evt_t));
     if (!s_evtq) return ESP_ERR_NO_MEM;
-    ESP_RETURN_ON_ERROR(esp_vhci_host_register_callback(&s_cb), TAG, "vhci cb");
 
     esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
     ESP_RETURN_ON_ERROR(esp_bt_controller_init(&bt_cfg), TAG, "bt init");
     ESP_RETURN_ON_ERROR(esp_bt_controller_enable(ESP_BT_MODE_CLASSIC_BT), TAG,
                         "bt enable");
+    ESP_RETURN_ON_ERROR(esp_vhci_host_register_callback(&s_cb), TAG, "vhci cb");
     s_bt_started = true;
     vTaskDelay(pdMS_TO_TICKS(300));
-    return read_bdaddr();
+    esp_err_t err = read_bdaddr();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Read_BD_ADDR did not complete: %s", esp_err_to_name(err));
+    }
+    return ESP_OK;
 }
 
 esp_err_t pswake_bt_wake(const char *ps5_addr, const char *controller_addr) {
@@ -164,8 +169,13 @@ esp_err_t pswake_bt_wake(const char *ps5_addr, const char *controller_addr) {
     ESP_LOGI(TAG, "Create_Connection to %s as %s", ps5_addr, controller_addr);
     ESP_RETURN_ON_ERROR(hci_send(cmd, sizeof(cmd)), TAG, "create conn send");
     uint8_t status = 0xff;
-    esp_err_t err = wait_status(opcode, 3000, &status);
-    ESP_LOGI(TAG, "Create_Connection status=0x%02x err=%s", status,
-             esp_err_to_name(err));
-    return err;
+    esp_err_t err = wait_status(opcode, 500, &status);
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "Create_Connection accepted status=0x%02x", status);
+    } else {
+        ESP_LOGW(TAG, "Create_Connection status not confirmed: status=0x%02x err=%s",
+                 status, esp_err_to_name(err));
+    }
+    vTaskDelay(pdMS_TO_TICKS(POST_CREATE_CONN_HOLD_MS));
+    return ESP_OK;
 }

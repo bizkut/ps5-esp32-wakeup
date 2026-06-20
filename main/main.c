@@ -23,6 +23,7 @@
 
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAIL_BIT BIT1
+#define MANUAL_WAKE_DONE_MS 5000
 
 typedef enum {
     ST_IDLE,
@@ -51,8 +52,12 @@ static app_state_t s_state = ST_IDLE;
 static char s_state_line[64];
 static char s_error[64];
 static int s_wake_attempts;
+static char s_wifi_status[24];
+static volatile bool s_manual_wake_active;
+static volatile bool s_bt_wake_active;
 
 static void wake_flow_task(void *arg);
+static void manual_bt_wake_task(void *arg);
 
 static void ping_success_cb(esp_ping_handle_t hdl, void *args) {
     (void)hdl;
@@ -74,9 +79,17 @@ static const char *state_name(app_state_t st) {
 }
 
 static void set_state(app_state_t st, const char *line, const char *err) {
+    if ((line && strcmp(line, "LINUX BOOT") == 0) || st == ST_LINUX_ON) {
+        display_set_os(DISPLAY_OS_LINUX);
+    }
     s_state = st;
     if (line) strlcpy(s_state_line, line, sizeof(s_state_line));
-    if (err) strlcpy(s_error, err, sizeof(s_error));
+    if (err) {
+        strlcpy(s_error, err, sizeof(s_error));
+    } else {
+        s_error[0] = 0;
+    }
+    display_set_net_status(s_wifi_status);
     char l2[64];
     snprintf(l2, sizeof(l2), "%s %s", s_profile.name, s_profile.last_ip);
     display_status(state_name(st), s_state_line, l2, s_error);
@@ -84,7 +97,7 @@ static void set_state(app_state_t st, const char *line, const char *err) {
 }
 
 static bool wake_flow_cancelled(void) {
-    return s_state == ST_IDLE || s_state == ST_LINUX_ON;
+    return s_manual_wake_active || s_state == ST_IDLE || s_state == ST_LINUX_ON;
 }
 
 static void start_wake_flow(const char *ip, const char *task_name) {
@@ -97,6 +110,18 @@ static void start_wake_flow(const char *ip, const char *task_name) {
     BaseType_t ok = xTaskCreate(wake_flow_task, task_name, 6144, task_ip, 5, NULL);
     if (ok != pdPASS) {
         free(task_ip);
+        set_state(ST_ERROR, "TASK FAILED", "NO TASK");
+    }
+}
+
+static void start_manual_bt_wake(void) {
+    if (s_manual_wake_active || s_bt_wake_active) return;
+    s_manual_wake_active = true;
+
+    BaseType_t ok = xTaskCreate(manual_bt_wake_task, "bt_wake_manual", 6144,
+                                NULL, 5, NULL);
+    if (ok != pdPASS) {
+        s_manual_wake_active = false;
         set_state(ST_ERROR, "TASK FAILED", "NO TASK");
     }
 }
@@ -139,12 +164,16 @@ static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         esp_wifi_connect();
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         if (s_wifi_retries++ < 10) {
+            strlcpy(s_wifi_status, "STA ...", sizeof(s_wifi_status));
             esp_wifi_connect();
         } else {
             xEventGroupSetBits(s_wifi_events, WIFI_FAIL_BIT);
         }
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
+        ip_event_got_ip_t *event = (ip_event_got_ip_t *)data;
         s_wifi_retries = 0;
+        snprintf(s_wifi_status, sizeof(s_wifi_status), "STA " IPSTR,
+                 IP2STR(&event->ip_info.ip));
         xEventGroupSetBits(s_wifi_events, WIFI_CONNECTED_BIT);
     }
 }
@@ -164,6 +193,7 @@ static esp_err_t start_ap(void) {
     ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_AP), TAG, "wifi ap mode");
     ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_AP, &ap), TAG, "wifi ap cfg");
     ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "wifi ap start");
+    strlcpy(s_wifi_status, "AP 192.168.4.1", sizeof(s_wifi_status));
     set_state(ST_IDLE, "AP 192.168.4.1", NULL);
     return ESP_OK;
 }
@@ -172,6 +202,7 @@ static esp_err_t start_wifi(void) {
     ESP_RETURN_ON_ERROR(esp_netif_init(), TAG, "netif");
     ESP_RETURN_ON_ERROR(esp_event_loop_create_default(), TAG, "event loop");
     s_wifi_events = xEventGroupCreate();
+    strlcpy(s_wifi_status, "NET ...", sizeof(s_wifi_status));
 
     if (strlen(CONFIG_PSWAKE_WIFI_SSID) == 0) {
 #if CONFIG_PSWAKE_AP_FALLBACK
@@ -264,21 +295,42 @@ static void wake_flow_task(void *arg) {
     set_state(ST_ARMED, "LINUX TIME", NULL);
 
     int down_ms = 0;
+    bool rest_pending = false;
     while (down_ms < CONFIG_PSWAKE_PING_TIMEOUT_MS) {
         if (wake_flow_cancelled()) {
             vTaskDelete(NULL);
             return;
         }
         bool ok = ping_once(target);
-        strlcpy(s_state_line, ok ? "LINUX TIME" : "WAIT REST",
+        if (!ok || rest_pending) {
+            rest_pending = true;
+            down_ms += CONFIG_PSWAKE_PING_INTERVAL_MS;
+        }
+        strlcpy(s_state_line, rest_pending ? "WAIT REST" : "LINUX TIME",
                 sizeof(s_state_line));
         set_state(ST_ARMED, s_state_line, NULL);
-        down_ms = ok ? 0 : down_ms + CONFIG_PSWAKE_PING_INTERVAL_MS;
+        if (down_ms >= CONFIG_PSWAKE_PING_TIMEOUT_MS) {
+            break;
+        }
         vTaskDelay(pdMS_TO_TICKS(CONFIG_PSWAKE_PING_INTERVAL_MS));
     }
 
-    set_state(ST_REST_DETECTED, "SETTLE", NULL);
-    vTaskDelay(pdMS_TO_TICKS(CONFIG_PSWAKE_REST_SETTLE_MS));
+    set_state(ST_REST_DETECTED, "WAIT REST", NULL);
+    if (CONFIG_PSWAKE_REST_SETTLE_MS > 0) {
+        vTaskDelay(pdMS_TO_TICKS(CONFIG_PSWAKE_REST_SETTLE_MS));
+    }
+
+    while (!wake_flow_cancelled()) {
+        if (ping_once(target)) {
+            break;
+        }
+        set_state(ST_REST_DETECTED, "WAIT REST", NULL);
+        vTaskDelay(pdMS_TO_TICKS(CONFIG_PSWAKE_PING_INTERVAL_MS));
+    }
+    if (wake_flow_cancelled()) {
+        vTaskDelete(NULL);
+        return;
+    }
 
     bool wake_ok = false;
     for (int i = 0; i < CONFIG_PSWAKE_WAKE_RETRIES; i++) {
@@ -287,9 +339,11 @@ static void wake_flow_task(void *arg) {
             return;
         }
         s_wake_attempts++;
-        set_state(ST_WAKE_SENT, "BT WAKE", NULL);
+        set_state(ST_WAKE_SENT, "WAKING UP", NULL);
+        s_bt_wake_active = true;
         esp_err_t err = pswake_bt_wake(s_profile.ps5_bt_addr,
                                        s_profile.controller_bt_addr);
+        s_bt_wake_active = false;
         if (err == ESP_OK) {
             wake_ok = true;
             break;
@@ -305,16 +359,65 @@ static void wake_flow_task(void *arg) {
         return;
     }
 
-    set_state(ST_WAIT_LINUX, "WAIT LINUX UP", NULL);
+    set_state(ST_WAIT_LINUX, "WAKING UP", NULL);
     int waited = 0;
+    bool awake_seen = false;
+    bool linux_boot_seen = false;
+    int boot_down_ms = 0;
     while (waited < CONFIG_PSWAKE_LINUX_UP_TIMEOUT_MS && s_state == ST_WAIT_LINUX) {
+        bool ok = ping_once(target);
+        if (!awake_seen) {
+            awake_seen = ok;
+        } else if (ok) {
+            boot_down_ms = 0;
+        } else {
+            boot_down_ms += CONFIG_PSWAKE_PING_INTERVAL_MS;
+            if (boot_down_ms >= CONFIG_PSWAKE_PING_TIMEOUT_MS) {
+                linux_boot_seen = true;
+                display_set_os(DISPLAY_OS_LINUX);
+                set_state(ST_WAIT_LINUX, "LINUX BOOT", NULL);
+                break;
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        waited += 2200;
+    }
+    while (linux_boot_seen && waited < CONFIG_PSWAKE_LINUX_UP_TIMEOUT_MS &&
+           s_state == ST_WAIT_LINUX) {
         vTaskDelay(pdMS_TO_TICKS(1000));
         waited += 1000;
     }
     if (s_state == ST_WAIT_LINUX) {
         display_set_os(DISPLAY_OS_PS5);
-        set_state(ST_IDLE, "READY", "LINUX UP TIMEOUT");
+        set_state(ST_IDLE, "READY",
+                  awake_seen ? "LINUX UP TIMEOUT" : "BOOT TIMEOUT");
     }
+    vTaskDelete(NULL);
+}
+
+static void manual_bt_wake_task(void *arg) {
+    (void)arg;
+    display_set_os(DISPLAY_OS_PS5);
+    s_wake_attempts++;
+    set_state(ST_WAKE_SENT, "WAKING UP", NULL);
+
+    s_bt_wake_active = true;
+    esp_err_t err = pswake_bt_wake(s_profile.ps5_bt_addr,
+                                   s_profile.controller_bt_addr);
+    s_bt_wake_active = false;
+    if (err != ESP_OK) {
+        snprintf(s_error, sizeof(s_error), "BT %s", esp_err_to_name(err));
+        set_state(ST_ERROR, "WAKE FAILED", s_error);
+        s_manual_wake_active = false;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(MANUAL_WAKE_DONE_MS));
+    if (s_state == ST_WAKE_SENT) {
+        set_state(ST_IDLE, "READY", "WAKE SENT");
+    }
+    s_manual_wake_active = false;
     vTaskDelete(NULL);
 }
 
@@ -380,10 +483,7 @@ static void button_task(void *arg) {
     while (1) {
         if (CONFIG_PSWAKE_BTN_WAKE_GPIO >= 0 &&
             gpio_get_level(CONFIG_PSWAKE_BTN_WAKE_GPIO) == 0) {
-            if (s_state == ST_IDLE && s_profile.last_ip[0]) {
-                display_set_os(DISPLAY_OS_PS5);
-                start_wake_flow(s_profile.last_ip, "wake_flow_manual");
-            }
+            start_manual_bt_wake();
             vTaskDelay(pdMS_TO_TICKS(700));
         }
         if (CONFIG_PSWAKE_BTN_CANCEL_GPIO >= 0 &&

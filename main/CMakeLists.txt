@@ -7,6 +7,7 @@ idf_component_register(
     REQUIRES
         bt
         driver
+        esp_driver_ledc
         esp_lcd
         esp_netif
         esp_wifi

@@ -4,7 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "driver/gpio.h"
+#include "driver/ledc.h"
 #include "driver/spi_master.h"
 #include "esp_check.h"
 #include "esp_heap_caps.h"
@@ -15,9 +15,18 @@
 #include "logo_assets.h"
 
 #define LCD_HOST SPI2_HOST
-#define LCD_H_RES 240
-#define LCD_V_RES 135
+#define LCD_H_RES 135
+#define LCD_V_RES 240
 #define LCD_PIXELS (LCD_H_RES * LCD_V_RES)
+#define LCD_LOGO_AREA_H ((LCD_V_RES * 2) / 3)
+#define LCD_TEXT_AREA_Y LCD_LOGO_AREA_H
+#define LCD_TEXT_AREA_H (LCD_V_RES - LCD_TEXT_AREA_Y)
+#define LCD_BL_LEDC_MODE LEDC_LOW_SPEED_MODE
+#define LCD_BL_LEDC_TIMER LEDC_TIMER_0
+#define LCD_BL_LEDC_CHANNEL LEDC_CHANNEL_0
+#define LCD_BL_LEDC_DUTY_RES LEDC_TIMER_10_BIT
+#define LCD_BL_LEDC_FREQ_HZ 5000
+#define LCD_BL_LEDC_DUTY_MAX ((1 << 10) - 1)
 
 #ifndef CONFIG_PSWAKE_HAS_DISPLAY
 #define CONFIG_PSWAKE_HAS_DISPLAY 0
@@ -43,10 +52,16 @@
 #define CONFIG_PSWAKE_LCD_Y_GAP 0
 #endif
 
+#ifndef CONFIG_PSWAKE_LCD_BRIGHTNESS
+#define CONFIG_PSWAKE_LCD_BRIGHTNESS 70
+#endif
+
 static const char *TAG = "display";
 static esp_lcd_panel_handle_t s_panel;
 static uint16_t *s_fb;
+static uint16_t *s_bottom_row;
 static display_os_t s_os = DISPLAY_OS_PS5;
+static char s_net_status[24];
 
 static uint16_t rgb565(uint8_t r, uint8_t g, uint8_t b) {
     return ((r & 0xf8) << 8) | ((g & 0xfc) << 3) | (b >> 3);
@@ -115,27 +130,40 @@ static void text(int x, int y, const char *s, int scale, uint16_t color) {
     }
 }
 
+static int text_width(const char *s, int scale) {
+    return s ? (int)strlen(s) * 6 * scale : 0;
+}
+
+static void text_centered(int x, int y, int w, const char *s, int scale,
+                          uint16_t color) {
+    int tw = text_width(s, scale);
+    int tx = x + (w - tw) / 2;
+    if (tx < x) tx = x;
+    text(tx, y, s ? s : "", scale, color);
+}
+
 static bool logo_bit(const uint8_t *bits, int index) {
     return (bits[index / 8] & (1 << (7 - (index % 8)))) != 0;
 }
 
-static void logo_mask(int x, int y, int w, int h, const uint8_t *bits,
-                      uint16_t color) {
-    for (int yy = 0; yy < h; yy++) {
+static void logo_mask_scaled(int x, int y, int src_w, int src_h, int dst_w,
+                             int dst_h, const uint8_t *bits, uint16_t color) {
+    for (int yy = 0; yy < dst_h; yy++) {
         int dst_y = y + yy;
         if (dst_y < 0 || dst_y >= LCD_V_RES) continue;
-        for (int xx = 0; xx < w; xx++) {
+        int src_y = (yy * src_h) / dst_h;
+        for (int xx = 0; xx < dst_w; xx++) {
             int dst_x = x + xx;
             if (dst_x < 0 || dst_x >= LCD_H_RES) continue;
-            if (logo_bit(bits, yy * w + xx)) {
+            int src_x = (xx * src_w) / dst_w;
+            if (logo_bit(bits, src_y * src_w + src_x)) {
                 s_fb[dst_y * LCD_H_RES + dst_x] = color;
             }
         }
     }
 }
 
-static void draw_logo(void) {
-    uint16_t black = rgb565(12, 12, 14);
+static void draw_logo(uint16_t color) {
     int logo_w = PS5_LOGO_W;
     int logo_h = PS5_LOGO_H;
     const uint8_t *bits = ps5_logo_bits;
@@ -146,10 +174,45 @@ static void draw_logo(void) {
         bits = linux_logo_bits;
     }
 
-    int x = (LCD_H_RES - logo_w) / 2;
-    int y = (106 - logo_h) / 2;
+    const int max_w = LCD_H_RES - 10;
+    const int max_h = LCD_LOGO_AREA_H - 10;
+    int draw_w = max_w;
+    int draw_h = (logo_h * draw_w) / logo_w;
+    if (draw_h > max_h) {
+        draw_h = max_h;
+        draw_w = (logo_w * draw_h) / logo_h;
+    }
+
+    int x = (LCD_H_RES - draw_w) / 2;
+    int y = (LCD_LOGO_AREA_H - draw_h) / 2;
     if (y < 0) y = 0;
-    logo_mask(x, y, logo_w, logo_h, bits, black);
+    logo_mask_scaled(x, y, logo_w, logo_h, draw_w, draw_h, bits, color);
+}
+
+static esp_err_t backlight_init(void) {
+    int brightness = CONFIG_PSWAKE_LCD_BRIGHTNESS;
+    if (brightness < 0) brightness = 0;
+    if (brightness > 100) brightness = 100;
+
+    ledc_timer_config_t timer_config = {
+        .speed_mode = LCD_BL_LEDC_MODE,
+        .timer_num = LCD_BL_LEDC_TIMER,
+        .duty_resolution = LCD_BL_LEDC_DUTY_RES,
+        .freq_hz = LCD_BL_LEDC_FREQ_HZ,
+        .clk_cfg = LEDC_AUTO_CLK,
+    };
+    ESP_RETURN_ON_ERROR(ledc_timer_config(&timer_config), TAG, "backlight timer");
+
+    ledc_channel_config_t channel_config = {
+        .gpio_num = CONFIG_PSWAKE_LCD_BL,
+        .speed_mode = LCD_BL_LEDC_MODE,
+        .channel = LCD_BL_LEDC_CHANNEL,
+        .intr_type = LEDC_INTR_DISABLE,
+        .timer_sel = LCD_BL_LEDC_TIMER,
+        .duty = (LCD_BL_LEDC_DUTY_MAX * brightness) / 100,
+        .hpoint = 0,
+    };
+    return ledc_channel_config(&channel_config);
 }
 
 esp_err_t display_init(void) {
@@ -157,9 +220,7 @@ esp_err_t display_init(void) {
     ESP_LOGI(TAG, "display disabled by device profile");
     return ESP_OK;
 #else
-    ESP_RETURN_ON_ERROR(gpio_set_direction(CONFIG_PSWAKE_LCD_BL, GPIO_MODE_OUTPUT),
-                        TAG, "backlight gpio");
-    gpio_set_level(CONFIG_PSWAKE_LCD_BL, 1);
+    ESP_RETURN_ON_ERROR(backlight_init(), TAG, "backlight");
 
     spi_bus_config_t buscfg = {
         .mosi_io_num = CONFIG_PSWAKE_LCD_MOSI,
@@ -208,6 +269,8 @@ esp_err_t display_init(void) {
 
     s_fb = heap_caps_malloc(LCD_PIXELS * sizeof(uint16_t), MALLOC_CAP_DMA);
     if (!s_fb) return ESP_ERR_NO_MEM;
+    s_bottom_row = heap_caps_malloc(LCD_H_RES * sizeof(uint16_t), MALLOC_CAP_DMA);
+    if (!s_bottom_row) return ESP_ERR_NO_MEM;
     display_status("BOOT", "DISPLAY READY", "", "");
     return ESP_OK;
 #endif
@@ -215,6 +278,14 @@ esp_err_t display_init(void) {
 
 void display_set_os(display_os_t os) {
     s_os = os;
+}
+
+void display_set_net_status(const char *status) {
+#if !CONFIG_PSWAKE_HAS_DISPLAY
+    ESP_LOGI(TAG, "net=%s", status ? status : "");
+#else
+    strlcpy(s_net_status, status ? status : "", sizeof(s_net_status));
+#endif
 }
 
 void display_status(const char *state, const char *line1, const char *line2,
@@ -225,20 +296,48 @@ void display_status(const char *state, const char *line1, const char *line2,
     return;
 #else
     if (!s_panel || !s_fb) return;
+    bool linux_theme = s_os == DISPLAY_OS_LINUX;
     uint16_t bg = rgb565(250, 250, 248);
-    uint16_t band = s_os == DISPLAY_OS_LINUX ? rgb565(20, 20, 20)
-                                             : rgb565(16, 80, 140);
+    uint16_t logo = rgb565(12, 12, 14);
+    uint16_t band = linux_theme ? rgb565(0, 0, 0) : rgb565(16, 80, 140);
     uint16_t fg = rgb565(230, 245, 238);
     uint16_t muted = rgb565(190, 215, 220);
+    const int band_y = LCD_TEXT_AREA_Y;
+    const int band_h = LCD_TEXT_AREA_H;
+    const char *primary = (line1 && line1[0]) ? line1 : state;
+    const char *secondary = (line2 && line2[0]) ? line2 : line3;
+    bool show_secondary = secondary && secondary[0] &&
+                          text_width(secondary, 1) <= LCD_H_RES - 8;
+    bool show_net = s_net_status[0] &&
+                    text_width(s_net_status, 1) <= LCD_H_RES - 8;
+    int primary_scale = text_width(primary, 3) <= (LCD_H_RES - 8) ? 3 :
+                        text_width(primary, 2) <= (LCD_H_RES - 8) ? 2 : 1;
+    int footer_lines = (show_secondary ? 1 : 0) + (show_net ? 1 : 0);
+    int footer_y = footer_lines ? band_y + band_h - footer_lines * 9 - 2 : 0;
+    int primary_area_h = footer_lines ? footer_y - band_y - 2 : band_h;
+    int primary_y = band_y + (primary_area_h - 7 * primary_scale) / 2;
+    if (primary_y < band_y + 4) primary_y = band_y + 4;
+
     fill(bg);
-    draw_logo();
-    rect(0, 106, LCD_H_RES, 29, band);
-    text(6, 111, state ? state : "", 1, fg);
-    text(78, 111, line1 ? line1 : "", 1, fg);
-    text(6, 124, line2 ? line2 : "", 1, muted);
-    if (line3 && line3[0]) {
-        text(168, 124, line3, 1, muted);
+    draw_logo(logo);
+    rect(0, band_y, LCD_H_RES, band_h, band);
+    text_centered(0, primary_y, LCD_H_RES, primary, primary_scale, fg);
+    if (show_secondary) {
+        text_centered(0, footer_y, LCD_H_RES, secondary, 1, muted);
+        footer_y += 9;
+    }
+    if (show_net) {
+        text_centered(0, footer_y, LCD_H_RES, s_net_status, 1, muted);
     }
     esp_lcd_panel_draw_bitmap(s_panel, 0, 0, LCD_H_RES, LCD_V_RES, s_fb);
+    if (s_bottom_row) {
+        for (int x = 0; x < LCD_H_RES; x++) {
+            s_bottom_row[x] = band;
+        }
+        esp_lcd_panel_draw_bitmap(s_panel, 0, LCD_V_RES - 1, LCD_H_RES,
+                                  LCD_V_RES, s_bottom_row);
+        esp_lcd_panel_draw_bitmap(s_panel, 0, LCD_V_RES, LCD_H_RES,
+                                  LCD_V_RES + 1, s_bottom_row);
+    }
 #endif
 }

@@ -74,7 +74,7 @@ config PSWAKE_PING_TIMEOUT_MS
 
 config PSWAKE_REST_SETTLE_MS
     int "Rest-mode settle delay before BT wake"
-    default 10000
+    default 0
 
 config PSWAKE_WAKE_RETRIES
     int "BT wake retries"
@@ -124,10 +124,16 @@ config PSWAKE_LCD_BL
     depends on PSWAKE_HAS_DISPLAY
     default 4
 
+config PSWAKE_LCD_BRIGHTNESS
+    int "T-Display LCD backlight brightness percent"
+    depends on PSWAKE_HAS_DISPLAY
+    range 0 100
+    default 70
+
 config PSWAKE_LCD_SWAP_XY
     bool "Swap LCD X/Y axes"
     depends on PSWAKE_HAS_DISPLAY
-    default y
+    default n
 
 config PSWAKE_LCD_MIRROR_X
     bool "Mirror LCD X axis"
@@ -137,16 +143,16 @@ config PSWAKE_LCD_MIRROR_X
 config PSWAKE_LCD_MIRROR_Y
     bool "Mirror LCD Y axis"
     depends on PSWAKE_HAS_DISPLAY
-    default n
+    default y
 
 config PSWAKE_LCD_X_GAP
     int "LCD X gap/offset"
     depends on PSWAKE_HAS_DISPLAY
-    default 40
+    default 51
 
 config PSWAKE_LCD_Y_GAP
     int "LCD Y gap/offset"
     depends on PSWAKE_HAS_DISPLAY
-    default 52
+    default 40
 
 endmenu

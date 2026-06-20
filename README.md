@@ -15,8 +15,11 @@ Sony Interactive Entertainment.
 ## Repository Contents
 
 - `main/` - ESP32 firmware source.
-- `tools/configure_from_controller.py` - USB helper that reads the paired
-  controller and PlayStation Bluetooth addresses into ESP-IDF config.
+- `tools/read_controller_addresses.py` - USB helper that reads the paired
+  controller and PlayStation Bluetooth addresses into `.pswake/controller.json`.
+- `tools/setup_wizard.py` - interactive ESP32 setup wizard that writes private
+  settings into ignored `sdkconfig.local`.
+- `tools/configure_from_controller.py` - compatibility one-shot helper.
 - `ps5-linux-loader-udp-beacon.patch` - patch for a compatible PS5 Linux loader
   tree to broadcast the arming beacon before rest mode.
 - `ps5-logo.jpg`, `ps5-linux.jpg` - source images used to generate the embedded
@@ -64,12 +67,41 @@ The patch sends three UDP broadcasts before `enter_rest_mode()`:
 PS5LINUX_ARMED v1 token=ps5-linux fw=<firmware>
 ```
 
-## Configure Firmware
+## Install ESP-IDF
 
-Install ESP-IDF, then source its environment in your shell:
+Install Espressif's ESP-IDF before building or flashing:
 
 ```sh
-. "$HOME/esp/esp-idf/export.sh"
+mkdir -p "$HOME/.espressif/v6.0.1"
+cd "$HOME/.espressif/v6.0.1"
+git clone -b v6.0.1 --recursive https://github.com/espressif/esp-idf.git
+cd esp-idf
+./install.sh esp32
+. ./export.sh
+```
+
+After install, confirm `idf.py` works:
+
+```sh
+idf.py --version
+```
+
+The helper scripts automatically source
+`$HOME/.espressif/v6.0.1/esp-idf/export.sh` when running `idf.py`. If your
+ESP-IDF checkout lives somewhere else, source it manually before running the
+helper, or set:
+
+```sh
+export IDF_PATH=/path/to/esp-idf
+```
+
+## Configure Firmware
+
+If you are not using the helper scripts, source the ESP-IDF environment in your
+shell:
+
+```sh
+. "$HOME/.espressif/v6.0.1/esp-idf/export.sh"
 ```
 
 Use `menuconfig` for board profile, Wi-Fi, token, timeout, and display settings:
@@ -85,16 +117,32 @@ mode. If the image is rotated or offset on your board revision, adjust
 `LCD X gap/offset`, and `LCD Y gap/offset` in `menuconfig`.
 
 To pull the paired controller and PlayStation Bluetooth addresses directly from
-a compatible USB-connected controller:
+a compatible USB-connected controller, then configure the ESP32:
 
 ```sh
 python3 -m pip install -r requirements.txt
-./tools/configure_from_controller.py
+
+# first: controller connected over USB
+./tools/read_controller_addresses.py
+
+# second: unplug the controller, plug in the ESP32
+./tools/setup_wizard.py
 ```
 
-The helper updates `sdkconfig.defaults` and the generated `sdkconfig` when it
-exists, then runs `idf.py reconfigure`. To continue straight into a build or
-flash:
+The wizard writes private values to ignored local files:
+
+- `.pswake/controller.json` - controller and paired PlayStation BT addresses.
+- `sdkconfig.local` - Wi-Fi, token, profile, UDP port, and BT addresses.
+
+The default Linux loader token is `ps5-linux`. It must match the loader patch
+macro `LINUX_WAKE_BEACON_TOKEN`; the default beacon looks like:
+
+```text
+PS5LINUX_ARMED v1 token=ps5-linux fw=<firmware>
+```
+
+The compatibility helper still supports the older one-shot flow without writing
+private values to tracked `sdkconfig.defaults`:
 
 ```sh
 ./tools/configure_from_controller.py --build
@@ -107,8 +155,9 @@ If `idf.py` is not on `PATH`, pass it explicitly:
 ./tools/configure_from_controller.py --idf-py "$IDF_PATH/tools/idf.py" --build
 ```
 
-Do not commit your generated `sdkconfig`; it can contain local Wi-Fi credentials
-and device-specific Bluetooth addresses.
+Do not commit generated local config; `sdkconfig`, `sdkconfig.local`, and
+`.pswake/` can contain Wi-Fi credentials and device-specific Bluetooth
+addresses.
 
 ## Build
 
