@@ -18,7 +18,7 @@ Entertainment.
 - USB cable for the controller.
 - USB cable for the ESP32.
 - ESP-IDF installed.
-- Modified Linux loader from https://github.com/bizkut/ps5-umtx2-host
+- A patched Linux loader.
 
 ## Install ESP-IDF
 
@@ -67,10 +67,20 @@ For non-interactive flashing on macOS, use a command like:
 ./tools/setup_wizard.py --non-interactive --board tdisplay --action flash --port /dev/cu.usbserial-XXXXXXXX
 ```
 
+## Patched Linux Loader
+
+This firmware needs a Linux loader patched to send the ESP32 UDP beacon.
+
+Options:
+
+- Apply `ps5-linux-loader-udp-beacon.patch` from this repository.
+- Inject a ready patched loader from https://github.com/bizkut/ps5-linux-loader/releases
+- Use the host browser from https://github.com/bizkut/ps5-umtx2-host/releases
+
 ## Use It
 
 1. Keep the ESP32 powered on.
-2. Inject the Linux loader from https://github.com/bizkut/ps5-umtx2-host
+2. Inject the patched Linux loader.
 3. The ESP32 screen changes to `LINUX TIME`.
 4. When the PS5 enters rest mode, the screen changes to `WAIT REST`.
 5. When the PS5 network comes back, ESP32 sends the Bluetooth wake signal.
