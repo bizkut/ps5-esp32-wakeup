@@ -586,11 +586,6 @@ void app_main(void) {
 
     load_profile();
     ESP_ERROR_CHECK_WITHOUT_ABORT(display_init());
-#if CONFIG_PSWAKE_LCD_TEST_LINUX_LOGO_ON_BOOT
-    display_set_os(DISPLAY_OS_LINUX);
-    set_state(ST_IDLE, "LOGO TEST", NULL);
-    vTaskDelay(pdMS_TO_TICKS(5000));
-#endif
     display_set_os(DISPLAY_OS_PS5);
     set_state(ST_IDLE, "BOOT", NULL);
     ESP_ERROR_CHECK_WITHOUT_ABORT(start_wifi());

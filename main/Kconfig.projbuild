@@ -130,11 +130,6 @@ config PSWAKE_LCD_BRIGHTNESS
     range 0 100
     default 70
 
-config PSWAKE_LCD_TEST_LINUX_LOGO_ON_BOOT
-    bool "Show Linux logo test at boot"
-    depends on PSWAKE_HAS_DISPLAY
-    default n
-
 config PSWAKE_LCD_SWAP_XY
     bool "Swap LCD X/Y axes"
     depends on PSWAKE_HAS_DISPLAY
