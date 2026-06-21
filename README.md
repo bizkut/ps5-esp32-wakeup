@@ -20,8 +20,8 @@ Sony Interactive Entertainment.
 - `tools/setup_wizard.py` - interactive ESP32 setup wizard that writes private
   settings into ignored `sdkconfig.local`.
 - `tools/configure_from_controller.py` - compatibility one-shot helper.
-- `ps5-linux-loader-udp-beacon.patch` - patch for a compatible PS5 Linux loader
-  tree to broadcast the arming beacon before rest mode.
+- `ps5-linux-loader-udp-beacon.patch` - reference patch for a compatible PS5
+  Linux loader tree to broadcast the arming beacon before rest mode.
 - `ps5-logo.jpg`, `ps5-linux.jpg` - source images used to generate the embedded
   LCD logo masks.
 - `profiles/` - board profile defaults for T-Display and headless DevKitC.
@@ -44,6 +44,16 @@ idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;profiles/t-display.defaults" rec
 idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;profiles/esp32-devkitc.defaults" reconfigure
 ```
 
+T-Display ESP32 boards are commonly available for about USD $8. One example:
+https://www.aliexpress.com/item/1005006860890245.html
+
+## Manual Wake Button
+
+On the T-Display profile, GPIO0 is configured as a manual Bluetooth wake button.
+Pressing it sends the same paired-controller Bluetooth wake sequence used by the
+automatic Linux wake flow and shows `WAKING UP` on the LCD. It can be used any
+time after boot, even before a Linux loader beacon has been detected.
+
 ## Compatible Controllers
 
 The USB configuration helper can read paired Bluetooth addresses from these
@@ -53,9 +63,20 @@ Sony controllers:
 - PS4 DualShock 4
 - PS3 DualShock 3 / Sixaxis
 
-## Loader Patch
+## Patched Linux Loader
 
-From your PS5 Linux loader checkout:
+The easiest path is to use the modified Linux loader that is already included
+with `ps5-umtx2-host`:
+
+```text
+https://github.com/bizkut/ps5-umtx2-host
+```
+
+Inject the Linux loader payload from that host project. It already includes the
+UDP beacon used by this ESP32 firmware.
+
+The patch file in this repository is kept as a reference for compatible loader
+trees. To apply it manually from a PS5 Linux loader checkout:
 
 ```sh
 patch -p1 < /path/to/ps5-esp32-wakeup/ps5-linux-loader-udp-beacon.patch
@@ -134,8 +155,9 @@ The wizard writes private values to ignored local files:
 - `.pswake/controller.json` - controller and paired PlayStation BT addresses.
 - `sdkconfig.local` - Wi-Fi, token, profile, UDP port, and BT addresses.
 
-The default Linux loader token is `ps5-linux`. It must match the loader patch
-macro `LINUX_WAKE_BEACON_TOKEN`; the default beacon looks like:
+The default Linux loader token is `ps5-linux`. It must match the loader payload
+you inject, including the ready-to-use loader in
+`https://github.com/bizkut/ps5-umtx2-host`. The default beacon looks like:
 
 ```text
 PS5LINUX_ARMED v1 token=ps5-linux fw=<firmware>
