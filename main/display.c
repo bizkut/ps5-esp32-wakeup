@@ -67,6 +67,21 @@ static uint16_t rgb565(uint8_t r, uint8_t g, uint8_t b) {
     return ((r & 0xf8) << 8) | ((g & 0xfc) << 3) | (b >> 3);
 }
 
+static uint16_t blend565(uint16_t dst, uint16_t src, uint8_t alpha) {
+    if (alpha == 0) return dst;
+    if (alpha == 255) return src;
+    int dr = ((dst >> 11) & 0x1f) * 255 / 31;
+    int dg = ((dst >> 5) & 0x3f) * 255 / 63;
+    int db = (dst & 0x1f) * 255 / 31;
+    int sr = ((src >> 11) & 0x1f) * 255 / 31;
+    int sg = ((src >> 5) & 0x3f) * 255 / 63;
+    int sb = (src & 0x1f) * 255 / 31;
+    uint8_t r = (uint8_t)((sr * alpha + dr * (255 - alpha)) / 255);
+    uint8_t g = (uint8_t)((sg * alpha + dg * (255 - alpha)) / 255);
+    uint8_t b = (uint8_t)((sb * alpha + db * (255 - alpha)) / 255);
+    return rgb565(r, g, b);
+}
+
 static const uint8_t font[][6] = {
     {' ', 0x00, 0x00, 0x00, 0x00, 0x00}, {'-', 0x08, 0x08, 0x08, 0x08, 0x08},
     {'.', 0x00, 0x60, 0x60, 0x00, 0x00}, {':', 0x00, 0x36, 0x36, 0x00, 0x00},
@@ -163,16 +178,35 @@ static void logo_mask_scaled(int x, int y, int src_w, int src_h, int dst_w,
     }
 }
 
+static void logo_alpha(int x, int y, int w, int h, const uint8_t *alpha,
+                       uint16_t color) {
+    for (int yy = 0; yy < h; yy++) {
+        int dst_y = y + yy;
+        if (dst_y < 0 || dst_y >= LCD_V_RES) continue;
+        for (int xx = 0; xx < w; xx++) {
+            int dst_x = x + xx;
+            if (dst_x < 0 || dst_x >= LCD_H_RES) continue;
+            uint8_t a = alpha[yy * w + xx];
+            uint16_t *dst = &s_fb[dst_y * LCD_H_RES + dst_x];
+            *dst = blend565(*dst, color, a);
+        }
+    }
+}
+
 static void draw_logo(uint16_t color) {
+#if LINUX_LOGO_ALPHA
+    if (s_os == DISPLAY_OS_LINUX) {
+        int x = (LCD_H_RES - LINUX_LOGO_W) / 2;
+        int y = (LCD_LOGO_AREA_H - LINUX_LOGO_H) / 2;
+        if (y < 0) y = 0;
+        logo_alpha(x, y, LINUX_LOGO_W, LINUX_LOGO_H, linux_logo_alpha, color);
+        return;
+    }
+#endif
+
     int logo_w = PS5_LOGO_W;
     int logo_h = PS5_LOGO_H;
     const uint8_t *bits = ps5_logo_bits;
-
-    if (s_os == DISPLAY_OS_LINUX) {
-        logo_w = LINUX_LOGO_W;
-        logo_h = LINUX_LOGO_H;
-        bits = linux_logo_bits;
-    }
 
     const int max_w = LCD_H_RES - 10;
     const int max_h = LCD_LOGO_AREA_H - 10;
@@ -312,16 +346,39 @@ void display_status(const char *state, const char *line1, const char *line2,
                     text_width(s_net_status, 1) <= LCD_H_RES - 8;
     int primary_scale = text_width(primary, 3) <= (LCD_H_RES - 8) ? 3 :
                         text_width(primary, 2) <= (LCD_H_RES - 8) ? 2 : 1;
+    char primary_top[24] = {0};
+    char primary_bottom[24] = {0};
+    bool primary_wrapped = false;
+    const char *split = strchr(primary, ' ');
+    if (primary_scale == 1 && split) {
+        size_t top_len = split - primary;
+        if (top_len > 0 && top_len < sizeof(primary_top) &&
+            strlen(split + 1) < sizeof(primary_bottom)) {
+            memcpy(primary_top, primary, top_len);
+            primary_top[top_len] = 0;
+            strlcpy(primary_bottom, split + 1, sizeof(primary_bottom));
+            primary_wrapped = text_width(primary_top, 2) <= (LCD_H_RES - 8) &&
+                              text_width(primary_bottom, 2) <= (LCD_H_RES - 8);
+            if (primary_wrapped) primary_scale = 2;
+        }
+    }
     int footer_lines = (show_secondary ? 1 : 0) + (show_net ? 1 : 0);
     int footer_y = footer_lines ? band_y + band_h - footer_lines * 9 - 2 : 0;
     int primary_area_h = footer_lines ? footer_y - band_y - 2 : band_h;
-    int primary_y = band_y + (primary_area_h - 7 * primary_scale) / 2;
+    int primary_h = primary_wrapped ? 14 * primary_scale + 4 : 7 * primary_scale;
+    int primary_y = band_y + (primary_area_h - primary_h) / 2;
     if (primary_y < band_y + 4) primary_y = band_y + 4;
 
     fill(bg);
     draw_logo(logo);
     rect(0, band_y, LCD_H_RES, band_h, band);
-    text_centered(0, primary_y, LCD_H_RES, primary, primary_scale, fg);
+    if (primary_wrapped) {
+        text_centered(0, primary_y, LCD_H_RES, primary_top, primary_scale, fg);
+        text_centered(0, primary_y + 7 * primary_scale + 4, LCD_H_RES,
+                      primary_bottom, primary_scale, fg);
+    } else {
+        text_centered(0, primary_y, LCD_H_RES, primary, primary_scale, fg);
+    }
     if (show_secondary) {
         text_centered(0, footer_y, LCD_H_RES, secondary, 1, muted);
         footer_y += 9;
