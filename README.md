@@ -3,7 +3,7 @@
 ESP32 firmware that wakes a PS5 back into Linux after the PS5 Linux loader sends
 its UDP beacon and the console enters rest mode.
 
-Video guide: https://youtu.be/I5VjPi-z6jg
+[![PS5 ESP32 Wake setup video](https://img.youtube.com/vi/I5VjPi-z6jg/hqdefault.jpg)](https://youtu.be/I5VjPi-z6jg)
 
 T-Display ESP32 hardware example: https://www.aliexpress.com/item/1005006860890245.html
 
