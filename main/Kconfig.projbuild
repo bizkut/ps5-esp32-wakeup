@@ -70,7 +70,11 @@ config PSWAKE_PING_INTERVAL_MS
 
 config PSWAKE_PING_TIMEOUT_MS
     int "Rest-mode ping timeout"
-    default 20000
+    default 1000
+
+config PSWAKE_ARMED_STABLE_PINGS
+    int "Successful pings required before rest detection"
+    default 2
 
 config PSWAKE_REST_SETTLE_MS
     int "Rest-mode settle delay before BT wake"
@@ -79,10 +83,6 @@ config PSWAKE_REST_SETTLE_MS
 config PSWAKE_WAKE_RETRIES
     int "BT wake retries"
     default 1
-
-config PSWAKE_LINUX_UP_TIMEOUT_MS
-    int "Linux-up wait timeout after wake"
-    default 180000
 
 config PSWAKE_BTN_WAKE_GPIO
     int "Wake/manual arm button GPIO (-1 disables)"
@@ -130,6 +130,11 @@ config PSWAKE_LCD_BRIGHTNESS
     range 0 100
     default 70
 
+config PSWAKE_LCD_TEST_LINUX_LOGO_ON_BOOT
+    bool "Show Linux logo test at boot"
+    depends on PSWAKE_HAS_DISPLAY
+    default n
+
 config PSWAKE_LCD_SWAP_XY
     bool "Swap LCD X/Y axes"
     depends on PSWAKE_HAS_DISPLAY
@@ -148,7 +153,7 @@ config PSWAKE_LCD_MIRROR_Y
 config PSWAKE_LCD_X_GAP
     int "LCD X gap/offset"
     depends on PSWAKE_HAS_DISPLAY
-    default 51
+    default 53
 
 config PSWAKE_LCD_Y_GAP
     int "LCD Y gap/offset"

@@ -26,6 +26,8 @@
 #define MANUAL_WAKE_DONE_MS 5000
 #define MIN_ACTION_DELAY_MS 2000
 #define PING_GRACE_MS 200
+#define IDLE_READY_PINGS 2
+#define IDLE_OFFLINE_PINGS 3
 
 typedef enum {
     ST_IDLE,
@@ -35,6 +37,7 @@ typedef enum {
     ST_WAIT_LINUX,
     ST_LINUX_BOOT,
     ST_LINUX_ON,
+    ST_LINUX_OFFLINE,
     ST_ERROR,
 } app_state_t;
 
@@ -61,6 +64,7 @@ static volatile bool s_bt_wake_active;
 
 static void wake_flow_task(void *arg);
 static void manual_bt_wake_task(void *arg);
+static void idle_monitor_task(void *arg);
 
 static void ping_success_cb(esp_ping_handle_t hdl, void *args) {
     (void)hdl;
@@ -77,13 +81,14 @@ static const char *state_name(app_state_t st) {
     case ST_WAIT_LINUX: return "WAIT LINUX";
     case ST_LINUX_BOOT: return "LINUX BOOT";
     case ST_LINUX_ON: return "LINUX ON";
+    case ST_LINUX_OFFLINE: return "LINUX OFF";
     case ST_ERROR: return "ERROR";
     default: return "?";
     }
 }
 
 static void set_state(app_state_t st, const char *line, const char *err) {
-    if (st == ST_LINUX_BOOT || st == ST_LINUX_ON ||
+    if (st == ST_LINUX_BOOT || st == ST_LINUX_ON || st == ST_LINUX_OFFLINE ||
         (line && strcmp(line, "LINUX BOOT") == 0)) {
         display_set_os(DISPLAY_OS_LINUX);
     }
@@ -116,6 +121,23 @@ static bool wake_flow_delay_cancelled(int delay_ms) {
         waited += step;
     }
     return wake_flow_cancelled();
+}
+
+static int action_delay_ms(int configured_ms) {
+    return configured_ms < MIN_ACTION_DELAY_MS ? MIN_ACTION_DELAY_MS : configured_ms;
+}
+
+static int ping_timeout_ms(void) {
+    int timeout_ms = CONFIG_PSWAKE_PING_TIMEOUT_MS;
+    if (timeout_ms < 250) timeout_ms = 250;
+    return timeout_ms;
+}
+
+static void set_idle_line(const char *line) {
+    if (s_state == ST_IDLE && strcmp(s_state_line, line) != 0) {
+        display_set_os(DISPLAY_OS_PS5);
+        set_state(ST_IDLE, line, NULL);
+    }
 }
 
 static void start_wake_flow(const char *ip, const char *task_name) {
@@ -266,10 +288,11 @@ static esp_err_t start_wifi(void) {
 static bool ping_once(ip_addr_t target) {
     bool ok = false;
     esp_ping_config_t cfg = ESP_PING_DEFAULT_CONFIG();
+    int timeout_ms = ping_timeout_ms();
     cfg.target_addr = target;
     cfg.count = 1;
-    cfg.interval_ms = MIN_ACTION_DELAY_MS;
-    cfg.timeout_ms = MIN_ACTION_DELAY_MS;
+    cfg.interval_ms = timeout_ms;
+    cfg.timeout_ms = timeout_ms;
     esp_ping_callbacks_t cbs = {
         .on_ping_success = ping_success_cb,
         .cb_args = &ok,
@@ -277,7 +300,7 @@ static bool ping_once(ip_addr_t target) {
     esp_ping_handle_t hdl = NULL;
     if (esp_ping_new_session(&cfg, &cbs, &hdl) != ESP_OK) return false;
     esp_ping_start(hdl);
-    vTaskDelay(pdMS_TO_TICKS(MIN_ACTION_DELAY_MS + PING_GRACE_MS));
+    vTaskDelay(pdMS_TO_TICKS(timeout_ms + PING_GRACE_MS));
     esp_ping_delete_session(hdl);
     return ok;
 }
@@ -298,6 +321,32 @@ static bool token_matches(const char *payload, int len, bool *linux_up) {
             tok[want] == '\r');
 }
 
+static void wait_post_wake_linux_boot(ip_addr_t target) {
+    while (s_state == ST_WAIT_LINUX) {
+        if (!ping_once(target)) {
+            set_state(ST_LINUX_BOOT, "LINUX BOOT", NULL);
+            break;
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(action_delay_ms(CONFIG_PSWAKE_PING_INTERVAL_MS)));
+    }
+
+    while (s_state == ST_LINUX_BOOT || s_state == ST_LINUX_ON ||
+           s_state == ST_LINUX_OFFLINE) {
+        bool ok = ping_once(target);
+        if (ok && s_state == ST_LINUX_OFFLINE) {
+            display_set_os(DISPLAY_OS_PS5);
+            set_state(ST_IDLE, "READY", NULL);
+            return;
+        } else if (ok) {
+            set_state(ST_LINUX_ON, "LINUX ONLINE", NULL);
+        } else if (s_state == ST_LINUX_ON) {
+            set_state(ST_LINUX_OFFLINE, "LINUX OFFLINE", NULL);
+        }
+        vTaskDelay(pdMS_TO_TICKS(action_delay_ms(CONFIG_PSWAKE_PING_INTERVAL_MS)));
+    }
+}
+
 static void wake_flow_task(void *arg) {
     char ip[16];
     strlcpy(ip, (char *)arg, sizeof(ip));
@@ -312,47 +361,42 @@ static void wake_flow_task(void *arg) {
     display_set_os(DISPLAY_OS_PS5);
     set_state(ST_ARMED, "LINUX TIME", NULL);
 
+    int stable_pings = 0;
+    int stable_required = CONFIG_PSWAKE_ARMED_STABLE_PINGS;
+    if (stable_required < 1) stable_required = 1;
     while (1) {
         if (wake_flow_cancelled()) {
             vTaskDelete(NULL);
             return;
         }
-        if (!ping_once(target)) {
+        bool ok = ping_once(target);
+        if (ok) {
+            if (stable_pings < stable_required) stable_pings++;
+            set_state(ST_ARMED, "LINUX TIME", NULL);
+        } else if (stable_pings >= stable_required) {
             break;
         }
-        set_state(ST_ARMED, "LINUX TIME", NULL);
-        vTaskDelay(pdMS_TO_TICKS(CONFIG_PSWAKE_PING_INTERVAL_MS));
+        vTaskDelay(pdMS_TO_TICKS(action_delay_ms(CONFIG_PSWAKE_PING_INTERVAL_MS)));
     }
 
     set_state(ST_REST_DETECTED, "WAIT REST", NULL);
     int rest_settle_ms = CONFIG_PSWAKE_REST_SETTLE_MS;
-    if (rest_settle_ms < MIN_ACTION_DELAY_MS) rest_settle_ms = MIN_ACTION_DELAY_MS;
-    if (wake_flow_delay_cancelled(rest_settle_ms)) {
+    if (rest_settle_ms > 0 && wake_flow_delay_cancelled(rest_settle_ms)) {
         vTaskDelete(NULL);
         return;
     }
 
-    bool rest_return_confirmed = false;
     while (!wake_flow_cancelled()) {
         if (ping_once(target)) {
-            if (wake_flow_delay_cancelled(MIN_ACTION_DELAY_MS)) {
-                vTaskDelete(NULL);
-                return;
-            }
-            if (ping_once(target)) {
-                rest_return_confirmed = true;
-                break;
-            }
+            break;
         }
         set_state(ST_REST_DETECTED, "WAIT REST", NULL);
-        int wait_ms = CONFIG_PSWAKE_PING_INTERVAL_MS;
-        if (wait_ms < MIN_ACTION_DELAY_MS) wait_ms = MIN_ACTION_DELAY_MS;
-        if (wake_flow_delay_cancelled(wait_ms)) {
+        if (wake_flow_delay_cancelled(action_delay_ms(CONFIG_PSWAKE_PING_INTERVAL_MS))) {
             vTaskDelete(NULL);
             return;
         }
     }
-    if (wake_flow_cancelled() || !rest_return_confirmed) {
+    if (wake_flow_cancelled()) {
         vTaskDelete(NULL);
         return;
     }
@@ -389,20 +433,7 @@ static void wake_flow_task(void *arg) {
         vTaskDelete(NULL);
         return;
     }
-    int waited = 0;
-    while (waited < CONFIG_PSWAKE_LINUX_UP_TIMEOUT_MS && s_state == ST_WAIT_LINUX) {
-        bool ok = ping_once(target);
-        if (!ok) {
-            set_state(ST_LINUX_BOOT, "LINUX BOOT", NULL);
-            vTaskDelete(NULL);
-            return;
-        }
-        vTaskDelay(pdMS_TO_TICKS(1000));
-        waited += MIN_ACTION_DELAY_MS + PING_GRACE_MS + 1000;
-    }
-    if (s_state == ST_WAIT_LINUX) {
-        set_state(ST_LINUX_BOOT, "LINUX BOOT", NULL);
-    }
+    wait_post_wake_linux_boot(target);
     vTaskDelete(NULL);
 }
 
@@ -465,13 +496,9 @@ static void udp_task(void *arg) {
         inet_ntop(AF_INET, &src.sin_addr, ip, sizeof(ip));
         save_last_ip(ip);
         if (linux_up) {
-            if (s_state == ST_LINUX_BOOT) continue;
-            display_set_os(DISPLAY_OS_LINUX);
-            set_state(ST_LINUX_ON, "BOOT CONFIRMED", NULL);
             continue;
         }
-        if (s_state == ST_IDLE || s_state == ST_ERROR || s_state == ST_LINUX_ON ||
-            s_state == ST_LINUX_BOOT) {
+        if (s_state == ST_IDLE || s_state == ST_ERROR) {
             display_set_os(DISPLAY_OS_PS5);
             start_wake_flow(ip, "wake_flow");
         }
@@ -509,6 +536,46 @@ static void button_task(void *arg) {
     }
 }
 
+static void idle_monitor_task(void *arg) {
+    (void)arg;
+    int idle_ok_count = 0;
+    int idle_fail_count = 0;
+    while (1) {
+        if (s_state != ST_IDLE || s_manual_wake_active || s_bt_wake_active ||
+            s_profile.last_ip[0] == 0) {
+            idle_ok_count = 0;
+            idle_fail_count = 0;
+            vTaskDelay(pdMS_TO_TICKS(action_delay_ms(CONFIG_PSWAKE_PING_INTERVAL_MS)));
+            continue;
+        }
+
+        ip_addr_t target;
+        if (!ipaddr_aton(s_profile.last_ip, &target)) {
+            set_idle_line("READY");
+            vTaskDelay(pdMS_TO_TICKS(action_delay_ms(CONFIG_PSWAKE_PING_INTERVAL_MS)));
+            continue;
+        }
+
+        bool ok = ping_once(target);
+        if (s_state == ST_IDLE && !s_manual_wake_active && !s_bt_wake_active) {
+            if (ok) {
+                if (idle_ok_count < IDLE_READY_PINGS) idle_ok_count++;
+                idle_fail_count = 0;
+                if (idle_ok_count >= IDLE_READY_PINGS) {
+                    set_idle_line("READY");
+                }
+            } else {
+                if (idle_fail_count < IDLE_OFFLINE_PINGS) idle_fail_count++;
+                idle_ok_count = 0;
+                if (idle_fail_count >= IDLE_OFFLINE_PINGS) {
+                    set_idle_line("OFFLINE");
+                }
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(action_delay_ms(CONFIG_PSWAKE_PING_INTERVAL_MS)));
+    }
+}
+
 void app_main(void) {
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -519,9 +586,15 @@ void app_main(void) {
 
     load_profile();
     ESP_ERROR_CHECK_WITHOUT_ABORT(display_init());
+#if CONFIG_PSWAKE_LCD_TEST_LINUX_LOGO_ON_BOOT
+    display_set_os(DISPLAY_OS_LINUX);
+    set_state(ST_IDLE, "LOGO TEST", NULL);
+    vTaskDelay(pdMS_TO_TICKS(5000));
+#endif
     display_set_os(DISPLAY_OS_PS5);
     set_state(ST_IDLE, "BOOT", NULL);
     ESP_ERROR_CHECK_WITHOUT_ABORT(start_wifi());
     xTaskCreate(udp_task, "udp", 4096, NULL, 5, NULL);
     xTaskCreate(button_task, "buttons", 2048, NULL, 4, NULL);
+    xTaskCreate(idle_monitor_task, "idle_monitor", 4096, NULL, 3, NULL);
 }

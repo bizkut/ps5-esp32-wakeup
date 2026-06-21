@@ -6,8 +6,9 @@ Classic Bluetooth wake using the paired controller and PlayStation Bluetooth
 addresses.
 
 The LCD shows the PS5 logo by default. When the loader beacon is detected, the
-screen says `LINUX TIME`. After Linux confirms boot with a `PS5LINUX_UP` packet,
-the display switches to the Linux logo.
+screen says `LINUX TIME`. The rest of the automatic flow is ping-driven:
+`WAIT REST`, `WAKING UP`, `LINUX BOOT`, `LINUX ONLINE`, `LINUX OFFLINE`, and
+back to `READY`.
 
 This is an unofficial hobby project and is not affiliated with or endorsed by
 Sony Interactive Entertainment.

@@ -36,10 +36,16 @@ CONFIG_KEYS = {
     "ps5_bt": "CONFIG_PSWAKE_PS5_BT_ADDR",
     "controller_bt": "CONFIG_PSWAKE_CONTROLLER_BT_ADDR",
     "udp_port": "CONFIG_PSWAKE_UDP_PORT",
+    "ping_timeout_ms": "CONFIG_PSWAKE_PING_TIMEOUT_MS",
 }
+DEPRECATED_CONFIG_KEYS = (
+    "CONFIG_PSWAKE_REST_RETURN_SETTLE_MS",
+    "CONFIG_PSWAKE_LINUX_UP_TIMEOUT_MS",
+)
 MAC_RE = re.compile(r"^[0-9A-F]{2}(:[0-9A-F]{2}){5}$")
 DEFAULT_TOKEN = "ps5-linux"
 DEFAULT_UDP_PORT = 9755
+DEFAULT_PING_TIMEOUT_MS = 1000
 DEFAULT_PROFILE_NAME = "ps5"
 DEFAULT_IDF_PATH = Path.home() / ".espressif" / "v6.0.1" / "esp-idf"
 
@@ -237,8 +243,24 @@ def set_config_value(path: Path, key: str, value: str | int | bool) -> bool:
     return changed
 
 
+def remove_config_values(path: Path, keys: tuple[str, ...]) -> bool:
+    if not path.exists():
+        return False
+    lines = path.read_text(encoding="utf-8").splitlines()
+    filtered = [
+        line
+        for line in lines
+        if not any(line.startswith(f"{key}=") for key in keys)
+    ]
+    if filtered == lines:
+        return False
+    path.write_text("\n".join(filtered) + "\n", encoding="utf-8")
+    return True
+
+
 def write_local_config(project: Path, values: dict[str, str | int | bool]) -> Path:
     path = local_config_path(project)
+    remove_config_values(path, DEPRECATED_CONFIG_KEYS)
     for key, value in values.items():
         set_config_value(path, key, value)
     return path
@@ -248,7 +270,7 @@ def update_generated_sdkconfig(project: Path, values: dict[str, str | int | bool
     sdkconfig = project / "sdkconfig"
     if not sdkconfig.exists():
         return False
-    changed = False
+    changed = remove_config_values(sdkconfig, DEPRECATED_CONFIG_KEYS)
     for key, value in values.items():
         changed = set_config_value(sdkconfig, key, value) or changed
     return changed

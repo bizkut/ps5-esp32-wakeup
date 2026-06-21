@@ -10,6 +10,7 @@ from pathlib import Path
 from pswake_helpers import (
     BOARD_PROFILES,
     CONFIG_KEYS,
+    DEFAULT_PING_TIMEOUT_MS,
     DEFAULT_PROFILE_NAME,
     DEFAULT_TOKEN,
     DEFAULT_UDP_PORT,
@@ -106,6 +107,12 @@ def main() -> int:
     parser.add_argument("--token", default=None, help="Linux loader beacon token")
     parser.add_argument("--profile-name", default=None, help="Firmware profile name")
     parser.add_argument("--udp-port", type=int, default=None, help="UDP beacon listen port")
+    parser.add_argument(
+        "--ping-timeout-ms",
+        type=int,
+        default=None,
+        help="Single ping timeout while tracking PS5 state",
+    )
     parser.add_argument("--port", default=None, help="ESP32 serial port")
     parser.add_argument("--action", choices=ACTION_CHOICES, default=None)
     parser.add_argument("--non-interactive", action="store_true")
@@ -139,6 +146,15 @@ def main() -> int:
         udp_port = args.udp_port if args.udp_port is not None else config_int(
             existing_config, CONFIG_KEYS["udp_port"], DEFAULT_UDP_PORT
         )
+        ping_timeout_ms = (
+            args.ping_timeout_ms
+            if args.ping_timeout_ms is not None
+            else config_int(
+                existing_config,
+                CONFIG_KEYS["ping_timeout_ms"],
+                DEFAULT_PING_TIMEOUT_MS,
+            )
+        )
         port = args.port or default_serial_port()
         action = args.action or "configure"
     else:
@@ -165,6 +181,15 @@ def main() -> int:
             config_int(existing_config, CONFIG_KEYS["udp_port"], DEFAULT_UDP_PORT)
         )
         udp_port = int(ask("UDP beacon port", udp_default))
+        ping_timeout_default = str(
+            args.ping_timeout_ms if args.ping_timeout_ms is not None else
+            config_int(
+                existing_config,
+                CONFIG_KEYS["ping_timeout_ms"],
+                DEFAULT_PING_TIMEOUT_MS,
+            )
+        )
+        ping_timeout_ms = int(ask("Ping timeout ms", ping_timeout_default))
         port_default = args.port if args.port is not None else default_serial_port()
         port = ask("ESP32 serial port", port_default)
         action = args.action or ask_choice(
@@ -186,6 +211,7 @@ def main() -> int:
         CONFIG_KEYS["ps5_bt"]: cache["ps5_bt"],
         CONFIG_KEYS["controller_bt"]: cache["controller_bt"],
         CONFIG_KEYS["udp_port"]: udp_port,
+        CONFIG_KEYS["ping_timeout_ms"]: ping_timeout_ms,
     }
 
     config = write_local_config(project, config_values)
